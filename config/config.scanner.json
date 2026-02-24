@@ -1,0 +1,5 @@
+{
+    "timeout": 10,
+    "verify_tls": false,
+    "user_agent": "WebAppScanner/0.1 (academic)"
+}
