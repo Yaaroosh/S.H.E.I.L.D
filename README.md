@@ -16,7 +16,7 @@ Current features:
 - Runs selected tests via flags (--ping, --headers)
 - Prints JSON results to stdout
 
-Next steps (when you're ready):
+Next steps:
 - Move each test into separate module files
 - Add a test registry and --list-tests / --all
 - Add report output (file writing)
