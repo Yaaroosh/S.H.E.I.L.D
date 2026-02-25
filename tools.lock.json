@@ -1,0 +1,26 @@
+{
+    "nodejs": {
+        "min_version": "18",
+        "recommended_version": "22"
+    },
+    
+    "nuclei": {
+        "tag": "v3.6.2",
+        "asset": "nuclei_3.6.2_windows_amd64.zip",
+        "exe": "nuclei.exe"
+    },
+    
+    "zap": {
+        "repo": "zaproxy/zap-archive",
+        "tag": "zap-v2.15.0",
+        "asset": "ZAP_2.15.0_Crossplatform.zip",
+        "entry_bat": "zap.bat"
+    },
+    
+    "juice_shop": {
+        "repo": "juice-shop/juice-shop",
+        "tag": "v17.1.0",
+        "entry": "app.js"
+    }
+
+}
