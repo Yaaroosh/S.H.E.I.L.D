@@ -1,0 +1,42 @@
+# Injection Attacks
+SQL Injection ✅ (ZAP, Nuclei)
+NoSQL Injection ✅ (ZAP, Nuclei)
+Command Injection ✅ (ZAP, Nuclei)
+LDAP Injection ✅ (ZAP)
+XML External Entity (XXE) ✅ (ZAP, Nuclei)
+Template Injection ✅ (Nuclei)
+
+# Authentication & Session
+Broken Authentication ✅ (ZAP, Nuclei)
+Session Fixation ✅ (ZAP)
+Weak Password Reset ✅ (Nuclei)
+JWT Vulnerabilities ✅ (Nuclei)
+Default Credentials ✅ (Nuclei)
+
+# Access Control
+Broken Access Control ✅ (ZAP)
+Privilege Escalation ❌ (Manual testing only)
+Path Traversal ✅ (ZAP, Nuclei)
+Insecure Direct Object References (IDOR) ✅ (ZAP)
+
+# Sensitive Data
+Exposed Credentials ✅ (ZAP, Nuclei)
+Sensitive Data in URLs/Headers ✅ (ZAP)
+Information Disclosure ✅ (ZAP, Nuclei)
+Unencrypted Data Transmission ✅ (ZAP)
+
+# Cross-Site Attacks
+Cross-Site Scripting (XSS) ✅ (ZAP, Nuclei)
+Cross-Site Request Forgery (CSRF) ✅ (ZAP)
+
+# Security Misconfiguration
+Security Headers Missing ✅ (ZAP, Nuclei)
+Outdated Libraries ✅ (Nuclei, ZAP)
+Debug Mode Enabled ✅ (Nuclei)
+Known Vulnerabilities in Dependencies ✅ (ZAP)
+
+# Business Logic
+Race Conditions ❌ (Manual testing only)
+Workflow Bypasses ✅ (Manual + ZAP)
+Price/Quantity Manipulation ✅ (ZAP Repeater/Manual)
+Coupon/Discount Abuse ❌ (Manual testing only) 

@@ -1,0 +1,8 @@
+{
+    "chat.tools.terminal.autoApprove": {
+        "/^powershell -Command \"Get-ChildItem -Path 'C:\\\\project\\\\S\\.H\\.E\\.I\\.L\\.D\\\\tools\\\\juice-shop\\\\build' -Recurse -Force\"$/": {
+            "approve": true,
+            "matchCommandLine": true
+        }
+    }
+}

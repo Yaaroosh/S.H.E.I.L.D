@@ -122,14 +122,25 @@ function Install-JuiceShop {
     $JuiceShopDir = Join-Path $ToolsDir "juice-shop"
 
     if (Test-Path $JuiceShopDir) {
-        $appJs = Join-Path $JuiceShopDir "app.js"
-        if (Test-Path $appJs) {
-            Write-Host "OWASP Juice Shop already installed." -ForegroundColor Green
+        $packageJson = Join-Path $JuiceShopDir "package.json"
+        $nodeModules = Join-Path $JuiceShopDir "node_modules"
+        $builtServer = Join-Path $JuiceShopDir "build\app"
+        $dockerMarker = Join-Path $JuiceShopDir 'INSTALLED_VIA_DOCKER'
+        
+        # check for docker-based installation first
+        if (Test-Path $dockerMarker) {
+            Write-Host "OWASP Juice Shop marked as installed via Docker." -ForegroundColor Green
+            return
+        }
+
+        # consider the install valid only if dependencies and the build output exist
+        if ((Test-Path $packageJson) -and (Test-Path $nodeModules) -and (Test-Path $builtServer)) {
+            Write-Host "OWASP Juice Shop already installed and built." -ForegroundColor Green
             return
         }
         else {
-            # Incomplete installation, remove and retry
-            Write-Host "Removing incomplete Juice Shop installation..." -ForegroundColor Yellow
+            # Incomplete or broken installation, remove and retry
+            Write-Host "Removing incomplete or broken Juice Shop installation..." -ForegroundColor Yellow
             Remove-Item -Path $JuiceShopDir -Recurse -Force -ErrorAction SilentlyContinue
         }
     }
@@ -138,11 +149,37 @@ function Install-JuiceShop {
     try {
         $nodeVersion = & node --version 2>$null
         Write-Host "Found Node.js: $nodeVersion" -ForegroundColor Green
+        if ($nodeVersion -match '^v(\d+)') {
+            $nodeMajor = [int]$matches[1]
+        } else {
+            $nodeMajor = 0
+        }
     }
     catch {
+        $nodeVersion = $null
+        $nodeMajor = 0
         Write-Host "Node.js is required to run OWASP Juice Shop but was not found." -ForegroundColor Red
-        Write-Host "Please install Node.js 18+ from https://nodejs.org/" -ForegroundColor Yellow
+    }
+
+    if (-not $nodeVersion) {
+        Write-Host "Please install Node.js 18+ (recommended v20 for best compatibility) from https://nodejs.org/" -ForegroundColor Yellow
         return
+    }
+
+    if ($nodeMajor -gt 20) {
+        Write-Host "Detected Node.js v$nodeMajor which may not be able to build Juice Shop." -ForegroundColor Yellow
+        if (Get-Command docker -ErrorAction SilentlyContinue) {
+            Write-Host "Docker is available; you may prefer to use the container instead of building." -ForegroundColor Cyan
+            Write-Host "The script will still attempt the source install unless you manually interrupt." -ForegroundColor Cyan
+            # optionally pull image for later
+            $imageTag = $Lock.juice_shop.tag.TrimStart('v')
+            & docker pull "bkimminich/juice-shop:$imageTag" | Out-Null
+            Write-Host "If build fails you can run the pulled container: docker run -p 3000:3000 bkimminich/juice-shop:$imageTag" -ForegroundColor Green
+        }
+        else {
+            Write-Host "Continuing with a source build despite unsupported Node version." -ForegroundColor Yellow
+        }
+        # do not return; proceed with clone and install
     }
 
     # Check for Git

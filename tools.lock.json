@@ -1,7 +1,7 @@
 {
     "nodejs": {
         "min_version": "18",
-        "recommended_version": "22"
+        "recommended_version": "20"
     },
     
     "nuclei": {
@@ -20,7 +20,7 @@
     "juice_shop": {
         "repo": "juice-shop/juice-shop",
         "tag": "v17.1.0",
-        "entry": "app.js"
+        "entry": "build\\app"  
     }
 
 }
