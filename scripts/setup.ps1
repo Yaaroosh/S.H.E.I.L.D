@@ -56,31 +56,30 @@ function Verify-Tool {
 }
 
 # -------------------------
-# Install Nuclei (pinned)
+# Install CodeQL CLI (pinned)
 # -------------------------
-function Install-Nuclei {
-    $NucleiDir = Join-Path $ToolsDir "nuclei"
-    $NucleiExe = Join-Path $NucleiDir $Lock.nuclei.exe
+function Install-CodeQL {
+    $CodeQLDir = Join-Path $ToolsDir "codeql"
+    $CodeQLExe = Join-Path $CodeQLDir $Lock.codeql.entry_exe
 
-    if (Test-Path $NucleiExe) {
-        Write-Host "Nuclei already installed." -ForegroundColor Green
-        & $NucleiExe -version
+    if (Test-Path $CodeQLExe) {
+        Write-Host "CodeQL already installed." -ForegroundColor Green
+        & $CodeQLExe version
         return
     }
 
-    $tag   = $Lock.nuclei.tag
-    $asset = $Lock.nuclei.asset
+    $repo  = $Lock.codeql.repo
+    $tag   = $Lock.codeql.tag
+    $asset = $Lock.codeql.asset
 
-    $url = "https://github.com/projectdiscovery/nuclei/releases/download/$tag/$asset"
+    $url = "https://github.com/$repo/releases/download/$tag/$asset"
     $zip = Join-Path $ToolsDir $asset
 
-    Download-And-ExtractZip -Url $url -ZipPath $zip -DestDir $NucleiDir
+    Download-And-ExtractZip -Url $url -ZipPath $zip -DestDir $CodeQLDir
 
-    # Verify installation
-    $NucleiExe = Join-Path $NucleiDir $Lock.nuclei.exe
-    Verify-Tool -Name "Nuclei" -ExecutablePath $NucleiExe -VersionArgs "-version"
-    Write-Host "Nuclei installed successfully." -ForegroundColor Green
-    & $NucleiExe -version
+    $CodeQLExe = Join-Path $CodeQLDir $Lock.codeql.entry_exe
+    Verify-Tool -Name "CodeQL" -ExecutablePath $CodeQLExe -VersionArgs "version"
+    Write-Host "CodeQL installed successfully." -ForegroundColor Green
 }
 
 # -------------------------
@@ -121,15 +120,44 @@ function Install-Zap {
 function Install-JuiceShop {
     $JuiceShopDir = Join-Path $ToolsDir "juice-shop"
 
+    $juiceShopChoice = Read-Host "Download or update OWASP Juice Shop? (y/N)"
+    if ($juiceShopChoice -notmatch '^(?i:y|yes)$') {
+        Write-Host "Skipping OWASP Juice Shop setup by user choice." -ForegroundColor Yellow
+        return
+    }
+
     if (Test-Path $JuiceShopDir) {
-        $appJs = Join-Path $JuiceShopDir "app.js"
-        if (Test-Path $appJs) {
-            Write-Host "OWASP Juice Shop already installed." -ForegroundColor Green
+        $packageJson = Join-Path $JuiceShopDir "package.json"
+        $nodeModules = Join-Path $JuiceShopDir "node_modules"
+        $configuredEntry = Join-Path $JuiceShopDir $Lock.juice_shop.entry
+        $buildCandidates = @(
+            $configuredEntry,
+            "$configuredEntry.js",
+            (Join-Path $JuiceShopDir "build\app.js")
+        )
+        $hasBuildOutput = $false
+        foreach ($candidate in $buildCandidates) {
+            if (Test-Path $candidate) {
+                $hasBuildOutput = $true
+                break
+            }
+        }
+        $dockerMarker = Join-Path $JuiceShopDir 'INSTALLED_VIA_DOCKER'
+        
+        # check for docker-based installation first
+        if (Test-Path $dockerMarker) {
+            Write-Host "OWASP Juice Shop marked as installed via Docker." -ForegroundColor Green
+            return
+        }
+
+        # consider the install valid only if dependencies and the build output exist
+        if ((Test-Path $packageJson) -and (Test-Path $nodeModules) -and $hasBuildOutput) {
+            Write-Host "OWASP Juice Shop already installed and built." -ForegroundColor Green
             return
         }
         else {
-            # Incomplete installation, remove and retry
-            Write-Host "Removing incomplete Juice Shop installation..." -ForegroundColor Yellow
+            # Incomplete or broken installation, remove and retry
+            Write-Host "Removing incomplete or broken Juice Shop installation..." -ForegroundColor Yellow
             Remove-Item -Path $JuiceShopDir -Recurse -Force -ErrorAction SilentlyContinue
         }
     }
@@ -138,11 +166,37 @@ function Install-JuiceShop {
     try {
         $nodeVersion = & node --version 2>$null
         Write-Host "Found Node.js: $nodeVersion" -ForegroundColor Green
+        if ($nodeVersion -match '^v(\d+)') {
+            $nodeMajor = [int]$matches[1]
+        } else {
+            $nodeMajor = 0
+        }
     }
     catch {
+        $nodeVersion = $null
+        $nodeMajor = 0
         Write-Host "Node.js is required to run OWASP Juice Shop but was not found." -ForegroundColor Red
-        Write-Host "Please install Node.js 18+ from https://nodejs.org/" -ForegroundColor Yellow
+    }
+
+    if (-not $nodeVersion) {
+        Write-Host "Please install Node.js 18+ (recommended v20 for best compatibility) from https://nodejs.org/" -ForegroundColor Yellow
         return
+    }
+
+    if ($nodeMajor -gt 20) {
+        Write-Host "Detected Node.js v$nodeMajor which may not be able to build Juice Shop." -ForegroundColor Yellow
+        if (Get-Command docker -ErrorAction SilentlyContinue) {
+            Write-Host "Docker is available; you may prefer to use the container instead of building." -ForegroundColor Cyan
+            Write-Host "The script will still attempt the source install unless you manually interrupt." -ForegroundColor Cyan
+            # optionally pull image for later
+            $imageTag = $Lock.juice_shop.tag.TrimStart('v')
+            & docker pull "bkimminich/juice-shop:$imageTag" | Out-Null
+            Write-Host "If build fails you can run the pulled container: docker run -p 3000:3000 bkimminich/juice-shop:$imageTag" -ForegroundColor Green
+        }
+        else {
+            Write-Host "Continuing with a source build despite unsupported Node version." -ForegroundColor Yellow
+        }
+        # do not return; proceed with clone and install
     }
 
     # Check for Git
@@ -187,7 +241,7 @@ function Install-JuiceShop {
     Write-Host "Then visit: http://localhost:3000" -ForegroundColor Cyan
 }
 
-Install-Nuclei
+Install-CodeQL
 Install-Zap
 Install-JuiceShop
 

@@ -1,0 +1,42 @@
+# Injection Attacks
+SQL Injection ✅ (ZAP, CodeQL)
+NoSQL Injection ✅ (ZAP, CodeQL)
+Command Injection ✅ (ZAP, CodeQL)
+LDAP Injection ✅ (ZAP)
+XML External Entity (XXE) ✅ (ZAP, CodeQL)
+Template Injection ✅ (CodeQL)
+
+# Authentication & Session
+Broken Authentication ✅ (ZAP, CodeQL)
+Session Fixation ✅ (ZAP)
+Weak Password Reset ✅ (CodeQL)
+JWT Vulnerabilities ✅ (CodeQL)
+Default Credentials ✅ (CodeQL)
+
+# Access Control
+Broken Access Control ✅ (ZAP)
+Privilege Escalation ❌ (Manual testing only)
+Path Traversal ✅ (ZAP, CodeQL)
+Insecure Direct Object References (IDOR) ✅ (ZAP)
+
+# Sensitive Data
+Exposed Credentials ✅ (ZAP, CodeQL)
+Sensitive Data in URLs/Headers ✅ (ZAP)
+Information Disclosure ✅ (ZAP, CodeQL)
+Unencrypted Data Transmission ✅ (ZAP)
+
+# Cross-Site Attacks
+Cross-Site Scripting (XSS) ✅ (ZAP, CodeQL)
+Cross-Site Request Forgery (CSRF) ✅ (ZAP)
+
+# Security Misconfiguration
+Security Headers Missing ✅ (ZAP, CodeQL)
+Outdated Libraries ✅ (CodeQL, ZAP)
+Debug Mode Enabled ✅ (CodeQL)
+Known Vulnerabilities in Dependencies ✅ (ZAP)
+
+# Business Logic
+Race Conditions ❌ (Manual testing only)
+Workflow Bypasses ✅ (Manual + ZAP)
+Price/Quantity Manipulation ✅ (ZAP Repeater/Manual)
+Coupon/Discount Abuse ❌ (Manual testing only) 
