@@ -35,33 +35,39 @@ The setup script will even detect Docker and offer this fallback automatically.
 `cli.py` (invoked via `python cli.py` from the project root) - CLI web app vulnerability scanner
 
 Current features:
-- Accepts a target URL (defaults to `http://localhost:3000` for Juice Shop)
+- Accepts a target URL (defaults to `http://localhost:3000`)
 - Loads configuration from `./config/config.json` if present, falling back to
   the committed `./config/config.scanner.json`.  When executed outside the
   project root the automatic lookup may fail, so either `cd` back to the
   workspace base or supply `--config <path>` explicitly.
 - Shared requests.Session with User-Agent
 - Runs full OWASP ZAP security scan using `--full-scan` (DAST)
-- Runs Semgrep static analysis scan (SAST) on the target source code
-- **New**: Run tools separately with `--zap-only` or `--semgrep-only` flags
-- **New**: Specify custom source path for Semgrep with `--source-path <path>`
-- Categorizes findings by OWASP vulnerability type (from both ZAP and Semgrep)
+- Runs CodeQL static analysis scan (SAST) on the target source code
+- **New**: Run tools separately with `--zap-only` or `--codeql-only` flags
+- **New**: Specify custom source path for CodeQL with `--source-path <path>`
+- Categorizes findings by OWASP vulnerability type (from both ZAP and CodeQL)
 - Generates a timestamped text report and prints JSON summary to stdout
-- Reports include results from both ZAP (DAST) and Semgrep (SAST) for broader coverage
+- Reports include results from both ZAP (DAST) and CodeQL (SAST) for broader coverage
 
 Usage examples:
 ```bash
-# Full scan (both ZAP and Semgrep)
+# Full scan (both ZAP and CodeQL)
 python cli.py --full-scan
 
 # ZAP DAST only
 python cli.py --zap-only
 
-# Semgrep SAST only (auto-detects Juice Shop source)
-python cli.py --semgrep-only
+# ZAP with authenticated session cookie
+python cli.py --zap-only --auth-cookie "session=abc123"
 
-# Semgrep with custom source path
-python cli.py --semgrep-only --source-path ./my-app/src
+# ZAP with bearer token header
+python cli.py --zap-only --auth-header "Authorization: Bearer <token>"
+
+# CodeQL SAST only (requires source path)
+python cli.py --codeql-only
+
+# CodeQL with custom source path
+python cli.py --codeql-only --source-path ./my-app/src
 ```
 
 Next steps (when you're ready):

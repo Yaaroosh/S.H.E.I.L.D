@@ -1,6 +1,7 @@
 
 import argparse
 import json
+import logging
 import os
 from urllib.parse import urlparse
 import certifi #for TLS verification
@@ -9,6 +10,10 @@ import urllib3
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 from scanner import VulnerabilityEngine, VulnerabilityParser, VulnerabilityReporter
+from scanner.logging_config import setup_logging
+
+
+logger = logging.getLogger(__name__)
 
 
 
@@ -75,20 +80,36 @@ def validate_url(url: str) -> None:
 
 
 
-def run_full_security_scan(target_url: str, timeout: float, verify_tls: bool, run_zap: bool = True, run_semgrep: bool = True, source_path: str = None) -> dict:
+def run_full_security_scan(
+    target_url: str,
+    timeout: float,
+    verify_tls: bool,
+    run_zap: bool = True,
+    run_codeql: bool = True,
+    source_path: str = None,
+    zap_auth_cookie: str = None,
+    zap_auth_header: str = None,
+) -> dict:
     """
     Run integrated security scan with categorization
     """
     try:
+        logger.info("Running full scan | target=%s | run_zap=%s | run_codeql=%s", target_url, run_zap, run_codeql)
         # Run scan (engine will also perform reachability check)
-        engine = VulnerabilityEngine(target_url, timeout=timeout, verify_tls=verify_tls)
-        scan_data = engine.run(run_zap=run_zap, run_semgrep=run_semgrep, source_path=source_path)
+        engine = VulnerabilityEngine(
+            target_url,
+            timeout=timeout,
+            verify_tls=verify_tls,
+            zap_auth_cookie=zap_auth_cookie,
+            zap_auth_header=zap_auth_header,
+        )
+        scan_data = engine.run(run_zap=run_zap, run_codeql=run_codeql, source_path=source_path)
         parser = VulnerabilityParser()
         
         if run_zap:
             parser.parse_zap(scan_data.get("zap", {}))
-        if run_semgrep:
-            parser.parse_semgrep(scan_data.get("semgrep", {}))
+        if run_codeql:
+            parser.parse_codeql(scan_data.get("codeql", {}))
         
         findings = parser.get_findings()
         summary = parser.get_summary()
@@ -98,6 +119,7 @@ def run_full_security_scan(target_url: str, timeout: float, verify_tls: bool, ru
         print(f"\n✓ Scan completed")
         print(f"  Report: {report_file}")
         print(f"  Summary: {reporter.generate_summary(findings)}")
+        logger.info("Scan complete. Report generated at %s", report_file)
         return {
             "test": "full_scan",
             "ok": True,
@@ -107,12 +129,14 @@ def run_full_security_scan(target_url: str, timeout: float, verify_tls: bool, ru
             "message": f"Scan completed. Report: {report_file}"
         }
     except ImportError as e:
+        logger.exception("Import error during full scan")
         return {
             "test": "full_scan",
             "ok": False,
             "error": f"Missing module: {e}. Make sure all vulnerability_*.py files are in the project root."
         }
     except Exception as e:
+        logger.exception("Unhandled error during full scan")
         return {
             "test": "full_scan",
             "ok": False,
@@ -126,7 +150,7 @@ def run_full_security_scan(target_url: str, timeout: float, verify_tls: bool, ru
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="S.H.E.I.L.D Web App Scanner")
-    parser.add_argument("url", nargs="?", default="http://localhost:3000", help="Target URL (default: http://localhost:3000 - OWASP Juice Shop)")
+    parser.add_argument("url", nargs="?", default="http://localhost:3000", help="Target URL (default: http://localhost:3000)")
 
     # Global options
     parser.add_argument("--timeout", type=float, default=None, help="Override timeout from config (seconds)")
@@ -138,10 +162,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
 
     # Test flags (ADD MORE HERE)
-    parser.add_argument("--full-scan", action="store_true", dest="full_scan", help="Run full security scan (both ZAP and Semgrep)")
+    parser.add_argument("--full-scan", action="store_true", dest="full_scan", help="Run full security scan (both ZAP and CodeQL)")
     parser.add_argument("--zap-only", action="store_true", dest="zap_only", help="Run only ZAP DAST scan")
-    parser.add_argument("--semgrep-only", action="store_true", dest="semgrep_only", help="Run only Semgrep SAST scan")
-    parser.add_argument("--source-path", type=str, default=None, help="Path to source code for Semgrep analysis (auto-detects Juice Shop if not provided)")
+    parser.add_argument("--codeql-only", action="store_true", dest="codeql_only", help="Run only CodeQL SAST scan")
+    parser.add_argument("--source-path", type=str, default=None, help="Path to source code for CodeQL analysis (required for --codeql-only or --full-scan)")
+    parser.add_argument("--auth-cookie", type=str, default=None, help="Cookie header value for authenticated ZAP scans (example: session=abc123)")
+    parser.add_argument("--auth-header", type=str, default=None, help="Custom auth header for ZAP requests (format: 'Authorization: Bearer <token>')")
 
     # Convenience flags (ADD MORE HERE)
     # parser.add_argument("--all", action="store_true", help="Run all tests")
@@ -150,6 +176,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main() -> int:
+    setup_logging("logs")
     parser = build_parser()
     args = parser.parse_args()
 
@@ -166,15 +193,17 @@ def main() -> int:
     # Shared HTTP session
     session = requests.Session()
     session.headers.update({"User-Agent": user_agent})
+    logger.debug("HTTP session initialized with user-agent: %s", user_agent)
 
     # Decide which tests to run
-    if not (args.full_scan or args.zap_only or args.semgrep_only):
-        print("No tests selected. Use --full-scan, --zap-only, or --semgrep-only")
+    if not (args.full_scan or args.zap_only or args.codeql_only):
+        print("No tests selected. Use --full-scan, --zap-only, or --codeql-only")
+        logger.warning("CLI invoked without test selection")
         return 2
 
     # Determine which tools to run
     run_zap = args.full_scan or args.zap_only
-    run_semgrep = args.full_scan or args.semgrep_only
+    run_codeql = args.full_scan or args.codeql_only
 
     results = []
 
@@ -185,8 +214,10 @@ def main() -> int:
             timeout, 
             verify_tls, 
             run_zap=run_zap, 
-            run_semgrep=run_semgrep,
-            source_path=args.source_path
+            run_codeql=run_codeql,
+            source_path=args.source_path,
+            zap_auth_cookie=args.auth_cookie,
+            zap_auth_header=args.auth_header,
         ))
     except Exception as e:
         results.append({"test": "full_scan", "ok": False, "error": f"{type(e).__name__}: {e}"})

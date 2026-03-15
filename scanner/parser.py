@@ -13,35 +13,35 @@ class VulnerabilityParser:
         """Initialize with OWASP vulnerability categories"""
         self.categories = {
             "Injection Attacks": {
-                "SQL Injection": ["zap", "semgrep"],
-                "NoSQL Injection": ["zap", "semgrep"],
-                "Command Injection": ["zap", "semgrep"],
-                "LDAP Injection": ["zap", "semgrep"],
-                "XML External Entity (XXE)": ["zap", "semgrep"],
+                "SQL Injection": ["zap", "codeql"],
+                "NoSQL Injection": ["zap", "codeql"],
+                "Command Injection": ["zap", "codeql"],
+                "LDAP Injection": ["zap", "codeql"],
+                "XML External Entity (XXE)": ["zap", "codeql"],
             },
             "Authentication & Session": {
-                "Broken Authentication": ["zap", "semgrep"],
-                "Session Fixation": ["zap", "semgrep"],
+                "Broken Authentication": ["zap", "codeql"],
+                "Session Fixation": ["zap", "codeql"],
             },
             "Access Control": {
-                "Broken Access Control": ["zap", "semgrep"],
-                "Path Traversal": ["zap", "semgrep"],
-                "Insecure Direct Object References (IDOR)": ["zap", "semgrep"],
+                "Broken Access Control": ["zap", "codeql"],
+                "Path Traversal": ["zap", "codeql"],
+                "Insecure Direct Object References (IDOR)": ["zap", "codeql"],
             },
             "Sensitive Data": {
-                "Exposed Credentials": ["zap", "semgrep"],
-                "Sensitive Data in URLs/Headers": ["zap", "semgrep"],
-                "Information Disclosure": ["zap", "semgrep"],
-                "Unencrypted Data Transmission": ["zap", "semgrep"],
+                "Exposed Credentials": ["zap", "codeql"],
+                "Sensitive Data in URLs/Headers": ["zap", "codeql"],
+                "Information Disclosure": ["zap", "codeql"],
+                "Unencrypted Data Transmission": ["zap", "codeql"],
             },
             "Cross-Site Attacks": {
-                "Cross-Site Scripting (XSS)": ["zap", "semgrep"],
-                "Cross-Site Request Forgery (CSRF)": ["zap", "semgrep"],
+                "Cross-Site Scripting (XSS)": ["zap", "codeql"],
+                "Cross-Site Request Forgery (CSRF)": ["zap", "codeql"],
             },
             "Security Misconfiguration": {
-                "Security Headers Missing": ["zap", "semgrep"],
-                "Outdated Libraries": ["zap", "semgrep"],
-                "Known Vulnerabilities in Dependencies": ["zap", "semgrep"],
+                "Security Headers Missing": ["zap", "codeql"],
+                "Outdated Libraries": ["zap", "codeql"],
+                "Known Vulnerabilities in Dependencies": ["zap", "codeql"],
             },
         }
         # Initialize findings structure
@@ -70,26 +70,57 @@ class VulnerabilityParser:
                 
                 self._categorize_finding(finding, "zap")
     
-    def parse_semgrep(self, semgrep_data: Dict):
-        """Parse Semgrep JSON results and categorize"""
-        if not semgrep_data or "results" not in semgrep_data:
+    def parse_codeql(self, codeql_data: Dict):
+        """Parse CodeQL SARIF results and categorize"""
+        if not codeql_data or "runs" not in codeql_data:
             return
-        severity_map = {
-            "ERROR": "CRITICAL",
-            "WARNING": "HIGH",
-            "INFO": "MEDIUM",
-            "LOW": "LOW",
-        }
-        for result in semgrep_data.get("results", []):
-            finding = {
-                "tool": "Semgrep",
-                "name": result.get("check_id", "Unknown"),
-                "description": result.get("extra", {}).get("message", ""),
-                "severity": severity_map.get(result.get("extra", {}).get("severity", "INFO").upper(), "MEDIUM"),
-                "url": result.get("path", ""),
-                "evidence": result.get("extra", {}).get("lines", ""),
-            }
-            self._categorize_finding(finding, "semgrep")
+
+        for run in codeql_data.get("runs", []):
+            rules = {}
+            for rule in run.get("tool", {}).get("driver", {}).get("rules", []):
+                rules[rule.get("id")] = rule
+
+            for result in run.get("results", []):
+                rule_id = result.get("ruleId", "Unknown")
+                rule = rules.get(rule_id, {})
+
+                level = (result.get("level") or "warning").lower()
+                properties = rule.get("properties", {})
+                security_severity = str(properties.get("security-severity", "")).strip()
+
+                if level == "error":
+                    severity = "CRITICAL"
+                elif security_severity:
+                    try:
+                        sec_val = float(security_severity)
+                        if sec_val >= 9.0:
+                            severity = "CRITICAL"
+                        elif sec_val >= 7.0:
+                            severity = "HIGH"
+                        elif sec_val >= 4.0:
+                            severity = "MEDIUM"
+                        else:
+                            severity = "LOW"
+                    except ValueError:
+                        severity = "HIGH" if level == "warning" else "MEDIUM"
+                else:
+                    severity = "HIGH" if level == "warning" else "MEDIUM"
+
+                message = result.get("message", {}).get("text", "")
+                artifact_uri = ""
+                locations = result.get("locations", [])
+                if locations:
+                    artifact_uri = locations[0].get("physicalLocation", {}).get("artifactLocation", {}).get("uri", "")
+
+                finding = {
+                    "tool": "CodeQL",
+                    "name": rule.get("name", rule_id),
+                    "description": message,
+                    "severity": severity,
+                    "url": artifact_uri,
+                    "evidence": rule_id,
+                }
+                self._categorize_finding(finding, "codeql")
     
     def _categorize_finding(self, finding: Dict, tool: str):
         """Categorize a single finding into appropriate category"""
@@ -105,14 +136,35 @@ class VulnerabilityParser:
                 break
         
         if not categorized:
-            # Fallback category
-            self.findings["Security Misconfiguration"].append({**finding, "vulnerability_type": "Other"})
+            inferred = self._infer_vulnerability_type(finding)
+            if inferred:
+                category, vulnerability_type = inferred
+                self.findings[category].append({**finding, "vulnerability_type": vulnerability_type})
+            else:
+                # Fallback category
+                fallback_type = finding.get("name", "Uncategorized Finding")
+                self.findings["Security Misconfiguration"].append({**finding, "vulnerability_type": fallback_type})
     
     def _match_vulnerability(self, finding_name: str, vuln_type: str) -> bool:
         """Check if finding matches vulnerability type"""
         finding_lower = finding_name.lower()
         vuln_lower = vuln_type.lower()
         return vuln_lower in finding_lower or finding_lower in vuln_lower
+
+    def _infer_vulnerability_type(self, finding: Dict):
+        """Infer category/type for tool-native finding names when direct matching fails."""
+        name = finding.get("name", "").lower()
+
+        if "cloud metadata" in name or "header not set" in name or "cross-domain" in name:
+            return ("Security Misconfiguration", "Security Headers Missing")
+        if "timestamp disclosure" in name or "information disclosure" in name:
+            return ("Sensitive Data", "Information Disclosure")
+        if "xss" in name or "cross-site scripting" in name:
+            return ("Cross-Site Attacks", "Cross-Site Scripting (XSS)")
+        if "csrf" in name or "cross-site request forgery" in name:
+            return ("Cross-Site Attacks", "Cross-Site Request Forgery (CSRF)")
+
+        return None
     
     def get_findings(self) -> Dict[str, List[Dict]]:
         """Return all categorized findings"""

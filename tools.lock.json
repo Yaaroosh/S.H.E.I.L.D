@@ -3,11 +3,12 @@
         "min_version": "18",
         "recommended_version": "20"
     },
-    
-    "nuclei": {
-        "tag": "v3.6.2",
-        "asset": "nuclei_3.6.2_windows_amd64.zip",
-        "exe": "nuclei.exe"
+
+    "codeql": {
+        "repo": "github/codeql-cli-binaries",
+        "tag": "v2.22.4",
+        "asset": "codeql-win64.zip",
+        "entry_exe": "codeql\\codeql.exe"
     },
     
     "zap": {

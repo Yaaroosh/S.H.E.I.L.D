@@ -1,12 +1,14 @@
 """
 Vulnerability Engine
-Orchestrates ZAP and Semgrep security scans
+Orchestrates ZAP and CodeQL security scans
 """
 
 import subprocess
 import json
-import sys
+import logging
 import os
+import shutil
+import tempfile
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Tuple
@@ -14,10 +16,23 @@ from typing import Dict, List, Tuple
 import requests
 
 
+logger = logging.getLogger(__name__)
+
+JS_SECURITY_SUITE = "codeql/javascript-queries:codeql-suites/javascript-security-extended.qls"
+
+
 class VulnerabilityEngine:
-    """Runs ZAP and Semgrep scans against a target"""
+    """Runs ZAP and CodeQL scans against a target"""
     
-    def __init__(self, target_url: str, output_dir: str = "scan-results", timeout: float = 10.0, verify_tls: bool = True):
+    def __init__(
+        self,
+        target_url: str,
+        output_dir: str = "scan-results",
+        timeout: float = 10.0,
+        verify_tls: bool = True,
+        zap_auth_cookie: str = None,
+        zap_auth_header: str = None,
+    ):
         self.target_url = target_url
         self.output_dir = Path(output_dir)
         self.output_dir.mkdir(exist_ok=True)
@@ -25,6 +40,8 @@ class VulnerabilityEngine:
         # settings used by scans
         self.timeout = timeout
         self.verify_tls = verify_tls
+        self.zap_auth_cookie = zap_auth_cookie
+        self.zap_auth_header = zap_auth_header
 
     def check_reachability(self) -> Dict:
         """Perform a simple HTTP GET to verify the target is reachable.
@@ -44,8 +61,9 @@ class VulnerabilityEngine:
     def run_zap_scan(self) -> Dict:
         """Execute OWASP ZAP scan and return JSON results"""
         print(f"[*] Starting OWASP ZAP scan on {self.target_url}...")
-        
-        zap_report = (Path.cwd() / self.output_dir / f"zap_report_{self.timestamp}.json").resolve()
+        logger.info("Starting ZAP scan for %s", self.target_url)
+
+        temp_report_path = None
         
         try:
             # Find ZAP executable from tools directory (check relative to CWD)
@@ -65,135 +83,203 @@ class VulnerabilityEngine:
                     zap_cmd = str(zap_path)
                     zap_dir = zap_path.parent
                     print(f"[*] Found ZAP at: {zap_cmd}")
+                    logger.debug("ZAP executable resolved to %s", zap_cmd)
                     break
             
             if not zap_cmd:
                 print("[!] ZAP not found. Checked:")
                 for p in zap_paths:
                     print(f"    {p}")
+                    logger.debug("ZAP path checked: %s", p)
                 return {}
+
+            with tempfile.NamedTemporaryFile(delete=False, suffix=".json") as temp_report:
+                temp_report_path = Path(temp_report.name)
             
-            cmd = [zap_cmd, "-cmd", "-quickurl", self.target_url, "-quickout", str(zap_report)]
+            cmd = [zap_cmd, "-cmd", "-quickurl", self.target_url, "-quickout", str(temp_report_path)]
+
+            zap_config_args = []
+            if self.zap_auth_cookie:
+                cookie_value = self.zap_auth_cookie.replace(" ", "")
+                zap_config_args.extend([
+                    "-config", "replacer.full_list(0).description=auth-cookie",
+                    "-config", "replacer.full_list(0).enabled=true",
+                    "-config", "replacer.full_list(0).matchtype=REQ_HEADER",
+                    "-config", "replacer.full_list(0).matchstr=Cookie",
+                    "-config", "replacer.full_list(0).regex=false",
+                    "-config", f"replacer.full_list(0).replacement={cookie_value}",
+                ])
+                logger.info("ZAP auth cookie configured")
+
+            if self.zap_auth_header:
+                parts = self.zap_auth_header.split(":", 1)
+                if len(parts) == 2:
+                    header_name = parts[0].strip()
+                    header_value = parts[1].strip()
+                    index = 1 if self.zap_auth_cookie else 0
+                    zap_config_args.extend([
+                        "-config", f"replacer.full_list({index}).description=auth-header",
+                        "-config", f"replacer.full_list({index}).enabled=true",
+                        "-config", f"replacer.full_list({index}).matchtype=REQ_HEADER",
+                        "-config", f"replacer.full_list({index}).matchstr={header_name}",
+                        "-config", f"replacer.full_list({index}).regex=false",
+                        "-config", f"replacer.full_list({index}).replacement={header_value}",
+                    ])
+                    logger.info("ZAP auth header configured for %s", header_name)
+                else:
+                    logger.warning("Invalid zap_auth_header format. Expected 'Header-Name: value'")
+
+            cmd.extend(zap_config_args)
             
             # Run ZAP from its own directory so it can find JAR
             result = subprocess.run(cmd, capture_output=True, text=True, timeout=300, cwd=str(zap_dir))
             
             if result.returncode != 0:
                 print(f"[!] ZAP warning: {result.stderr}")
+                logger.warning("ZAP returned non-zero exit code %s: %s", result.returncode, result.stderr)
             
-            if zap_report.exists():
-                with open(zap_report) as f:
+            if temp_report_path and temp_report_path.exists():
+                with open(temp_report_path, encoding="utf-8") as f:
                     return json.load(f)
             else:
                 print("[!] ZAP report not generated")
+                logger.warning("ZAP report was not generated")
                 return {}
                 
         except subprocess.TimeoutExpired:
             print("[!] ZAP scan timed out (5 minutes)")
+            logger.error("ZAP scan timed out")
             return {}
         except Exception as e:
             print(f"[!] ZAP scan failed: {e}")
+            logger.exception("ZAP scan failed")
             return {}
+        finally:
+            if temp_report_path and temp_report_path.exists():
+                try:
+                    temp_report_path.unlink()
+                except OSError:
+                    logger.debug("Failed to remove temporary ZAP report: %s", temp_report_path)
     
-    def run_semgrep_scan(self, source_path: str = None) -> Dict:
-        """Execute Semgrep scan and return JSON results"""
-        print(f"[*] Starting Semgrep scan...")
-        
-        # Determine source path
+    def run_codeql_scan(self, source_path: str = None) -> Dict:
+        """Execute CodeQL scan and return SARIF results"""
+        print(f"[*] Starting CodeQL scan...")
+        logger.info("Starting CodeQL scan")
+
         if source_path is None:
-            # Try to find Juice Shop source if target is localhost:3000
-            if "localhost:3000" in self.target_url:
-                juice_shop_path = Path.cwd() / "tools" / "juice-shop"
-                if juice_shop_path.exists():
-                    source_path = str(juice_shop_path)
-                    print(f"[*] Scanning Juice Shop source at: {source_path}")
-                else:
-                    print("[!] Note: Semgrep requires source code. Juice Shop source not found.")
-                    return {"results": []}
-            else:
-                print("[!] Note: Semgrep requires source code path. Use --source-path to specify.")
-                return {"results": []}
+            print("[!] CodeQL requires source code path. Provide --source-path <path>.")
+            logger.warning("CodeQL source path missing; skipping CodeQL scan")
+            return {"runs": []}
+
+        source_root = Path(source_path).expanduser().resolve()
+        if not source_root.exists() or not source_root.is_dir():
+            print(f"[!] Invalid --source-path: {source_root}")
+            logger.warning("Invalid CodeQL source path: %s", source_root)
+            return {"runs": []}
+
+        source_path = str(source_root)
+        print(f"[*] Scanning source at: {source_path}")
+        logger.debug("CodeQL source path: %s", source_path)
         
+        temp_dir = None
         try:
-            # Try to find semgrep executable
-            # First, try the Python user scripts directory
-            user_scripts_dir = Path.home() / "AppData" / "Local" / "Packages" / "PythonSoftwareFoundation.Python.3.11_qbz5n2kfra8p0" / "LocalCache" / "local-packages" / "Python311" / "Scripts"
-            pysemgrep_path = user_scripts_dir / "pysemgrep.exe"
-            
-            if pysemgrep_path.exists():
-                semgrep_cmd = str(pysemgrep_path)
-            else:
-                # Fall back to trying semgrep in PATH
-                semgrep_cmd = "semgrep"
-            
-            cmd = [
-                semgrep_cmd,
-                "--config", "p/ci",  # Use CI ruleset
-                "--json",
-                source_path
+            codeql_candidates = [
+                Path.cwd() / "tools" / "codeql" / "codeql" / "codeql.exe",
+                Path.cwd() / "tools" / "codeql" / "codeql.exe",
+                Path("tools/codeql/codeql/codeql.exe").resolve(),
+                Path("tools/codeql/codeql.exe").resolve(),
             ]
-            
-            # Set UTF-8 encoding for subprocess to handle Unicode in source code
+
+            codeql_cmd = None
+            for candidate in codeql_candidates:
+                if candidate.exists():
+                    codeql_cmd = str(candidate)
+                    break
+
+            if not codeql_cmd:
+                codeql_cmd = "codeql"
+
+            temp_dir = Path(tempfile.mkdtemp(prefix="codeql_scan_"))
+            db_dir = temp_dir / "db"
+            sarif_output = temp_dir / "results.sarif"
+
             env = os.environ.copy()
             env['PYTHONIOENCODING'] = 'utf-8'
             env['PYTHONUTF8'] = '1'
-            
-            print(f"[*] Running Semgrep analysis...")
-            result = subprocess.run(cmd, capture_output=True, text=False, timeout=300, cwd=source_path, env=env)
-            
-            # Save stderr to a file for debugging
-            if result.stderr:
-                error_file = self.output_dir / f"semgrep_error_{self.timestamp}.txt"
-                try:
-                    with open(error_file, 'wb') as f:
-                        f.write(result.stderr)
-                    print(f"[*] Semgrep stderr saved to: {error_file}")
-                except Exception:
-                    pass
-            
-            # Decode output with proper encoding
-            try:
-                stdout = result.stdout.decode('utf-8', errors='ignore') if result.stdout else ""
-                stderr_text = result.stderr.decode('utf-8', errors='ignore') if result.stderr else ""
-            except Exception:
-                stdout = ""
-                stderr_text = ""
-            
-            # Semgrep returns 0 (no findings) or 1 (findings found) on success
-            if result.returncode not in (0, 1):
-                print(f"[!] Semgrep encountered an error (exit code: {result.returncode})")
-                if stderr_text and len(stderr_text.strip()) < 500:
-                    # Try to print a short error message
-                    error_lines = stderr_text.strip().split('\n')
-                    if error_lines:
-                        print(f"[!] Error: {error_lines[-1][:200]}")
-                return {"results": []}
-            
-            # Parse JSON from stdout
-            if stdout:
-                try:
-                    data = json.loads(stdout)
-                    findings_count = len(data.get("results", []))
-                    if findings_count > 0:
-                        print(f"[*] Semgrep found {findings_count} potential issues")
-                    else:
-                        print("[*] Semgrep scan complete - no issues found")
-                    return data
-                except json.JSONDecodeError:
-                    print("[!] Semgrep output is not valid JSON")
-                    return {"results": []}
-            else:
-                print("[*] Semgrep scan complete - no issues found")
-                return {"results": []}
+
+            create_cmd = [
+                codeql_cmd,
+                "database",
+                "create",
+                str(db_dir),
+                "--language=javascript-typescript",
+                "--source-root",
+                source_path,
+                "--overwrite",
+            ]
+
+            print("[*] Building CodeQL database...")
+            create_result = subprocess.run(create_cmd, capture_output=True, text=True, timeout=900, env=env)
+            if create_result.returncode != 0:
+                logger.error("CodeQL database creation failed: %s", create_result.stderr[-500:])
+                print("[!] CodeQL database creation failed")
+                return {"runs": []}
+
+            analyze_cmd = [
+                codeql_cmd,
+                "database",
+                "analyze",
+                str(db_dir),
+                JS_SECURITY_SUITE,
+                "--download",
+                "--format=sarif-latest",
+                "--output",
+                str(sarif_output),
+            ]
+
+            print("[*] Running CodeQL analysis...")
+            analyze_result = subprocess.run(analyze_cmd, capture_output=True, text=True, timeout=900, env=env)
+            if analyze_result.returncode != 0:
+                logger.error("CodeQL analysis failed: %s", analyze_result.stderr[-500:])
+                print("[!] CodeQL analysis failed")
+                return {"runs": []}
+
+            if sarif_output.exists():
+                with open(sarif_output, "r", encoding="utf-8") as file:
+                    sarif_data = json.load(file)
+                findings_count = sum(len(run.get("results", [])) for run in sarif_data.get("runs", []))
+                if findings_count > 0:
+                    print(f"[*] CodeQL found {findings_count} potential issues")
+                    logger.info("CodeQL found %s issues", findings_count)
+                else:
+                    print("[*] CodeQL scan complete - no issues found")
+                    logger.info("CodeQL completed with zero findings")
+                return sarif_data
+
+            print("[*] CodeQL scan complete - no SARIF output generated")
+            logger.info("CodeQL completed with no SARIF output")
+            return {"runs": []}
+        except FileNotFoundError:
+            print("[!] CodeQL CLI not found. Run scripts/before_setup.bat to install CodeQL.")
+            logger.error("CodeQL executable not found")
+            return {"runs": []}
         except subprocess.TimeoutExpired:
-            print("[!] Semgrep scan timed out (5 minutes)")
-            return {"results": []}
+            print("[!] CodeQL scan timed out")
+            logger.error("CodeQL scan timed out")
+            return {"runs": []}
         except Exception as e:
-            print(f"[!] Semgrep scan failed: {e}")
-            return {"results": []}
+            print(f"[!] CodeQL scan failed: {e}")
+            logger.exception("CodeQL scan failed")
+            return {"runs": []}
+        finally:
+            if temp_dir and temp_dir.exists():
+                try:
+                    shutil.rmtree(temp_dir, ignore_errors=True)
+                except Exception:
+                    logger.debug("Failed to cleanup CodeQL temp dir: %s", temp_dir)
     
-    def run(self, run_zap: bool = True, run_semgrep: bool = True, source_path: str = None) -> Dict:
-        """Run ZAP and Semgrep scans and return raw results"""
+    def run(self, run_zap: bool = True, run_codeql: bool = True, source_path: str = None) -> Dict:
+        """Run ZAP and CodeQL scans and return raw results"""
         print(f"\n{'=' * 80}")
         print(f"Starting security scan of {self.target_url}")
         print(f"{'=' * 80}\n")
@@ -210,7 +296,7 @@ class VulnerabilityEngine:
         if run_zap:
             results["zap"] = self.run_zap_scan()
         
-        if run_semgrep:
-            results["semgrep"] = self.run_semgrep_scan(source_path)
+        if run_codeql:
+            results["codeql"] = self.run_codeql_scan(source_path)
         
         return results
