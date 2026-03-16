@@ -45,6 +45,7 @@ Current features:
 - Runs CodeQL static analysis scan (SAST) on the target source code
 - **New**: Run tools separately with `--zap-only` or `--codeql-only` flags
 - **New**: Specify custom source path for CodeQL with `--source-path <path>`
+- CodeQL database is built in a temporary OS directory during each run and cleaned up afterward; `--source-path` is used only as the analysis source root
 - Categorizes findings by OWASP vulnerability type (from both ZAP and CodeQL)
 - Generates a timestamped text report and prints JSON summary to stdout
 - Reports include results from both ZAP (DAST) and CodeQL (SAST) for broader coverage
