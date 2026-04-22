@@ -1,6 +1,6 @@
 """
 Vulnerability Engine
-Orchestrates ZAP and CodeQL security scans
+Orchestrates ZAP, CodeQL, and directory brute-force security scans
 """
 
 import subprocess
@@ -19,10 +19,11 @@ import requests
 logger = logging.getLogger(__name__)
 
 JS_SECURITY_SUITE = "codeql/javascript-queries:codeql-suites/javascript-security-extended.qls"
+DEFAULT_OFFICIAL_FFUF_WORDLIST = Path("tools/ffuf/wordlists/common.txt")
 
 
 class VulnerabilityEngine:
-    """Runs ZAP and CodeQL scans against a target"""
+    """Runs ZAP, CodeQL, and directory brute-force scans against a target"""
     
     def __init__(
         self,
@@ -277,9 +278,144 @@ class VulnerabilityEngine:
                     shutil.rmtree(temp_dir, ignore_errors=True)
                 except Exception:
                     logger.debug("Failed to cleanup CodeQL temp dir: %s", temp_dir)
+
+    def run_dirscan_scan(
+        self,
+        wordlist_path: str = None,
+        recursive: bool = True,
+        recursion_depth: int = 2,
+        threads: int = 80,
+        rate: int = 0,
+        extensions: str = "",
+    ) -> Dict:
+        """Execute a directory brute-force scan and return discovered paths."""
+        print(f"[*] Starting directory scan on {self.target_url}...")
+        logger.info("Starting directory scan for %s", self.target_url)
+
+        temp_dir = None
+        wordlist_file = None
+
+        try:
+            ffuf_candidates = [
+                Path.cwd() / "tools" / "ffuf" / "ffuf.exe",
+                Path.cwd() / "tools" / "ffuf" / "ffuf",
+                Path("tools/ffuf/ffuf.exe").resolve(),
+                Path("tools/ffuf/ffuf").resolve(),
+            ]
+
+            ffuf_cmd = None
+            for candidate in ffuf_candidates:
+                if candidate.exists():
+                    ffuf_cmd = str(candidate)
+                    break
+
+            if not ffuf_cmd:
+                ffuf_cmd = shutil.which("ffuf") or shutil.which("ffuf.exe")
+
+            if not ffuf_cmd:
+                print("[!] Directory scanner not found. Run scripts/before_setup.bat to install ffuf.")
+                logger.warning("directory scanner executable not found")
+                return {"results": []}
+
+            if wordlist_path:
+                candidate = Path(wordlist_path).expanduser().resolve()
+                if not candidate.exists() or not candidate.is_file():
+                    print(f"[!] Invalid dirscan wordlist: {candidate}")
+                    logger.warning("Invalid dirscan wordlist: %s", candidate)
+                    return {"results": []}
+                wordlist_file = candidate
+            else:
+                official_candidates = [
+                    (Path.cwd() / "tools" / "ffuf" / "wordlists" / "common.txt").resolve(),
+                    DEFAULT_OFFICIAL_FFUF_WORDLIST.resolve(),
+                ]
+                for official in official_candidates:
+                    if official.exists() and official.is_file():
+                        wordlist_file = official
+                        break
+
+                if not wordlist_file:
+                    print("[!] Official ffuf wordlist not found. Run scripts/before_setup.bat or provide --dirscan-wordlist.")
+                    logger.warning("Official ffuf wordlist not found and no custom wordlist was provided")
+                    return {"results": []}
+
+            with tempfile.NamedTemporaryFile(delete=False, suffix=".json") as temp_output:
+                output_path = Path(temp_output.name)
+
+            target_base = self.target_url.rstrip("/")
+            cmd = [
+                ffuf_cmd,
+                "-u",
+                f"{target_base}/FUZZ",
+                "-w",
+                str(wordlist_file),
+                "-of",
+                "json",
+                "-o",
+                str(output_path),
+                "-ac",
+                "-mc",
+                "200,204,301,302,307,308,401,403,405",
+                "-t",
+                str(max(1, threads)),
+            ]
+
+            if recursive:
+                cmd.extend(["-recursion", "-recursion-depth", str(max(0, recursion_depth)), "-recursion-strategy", "greedy"])
+
+            if rate > 0:
+                cmd.extend(["-rate", str(rate)])
+
+            if extensions.strip():
+                cmd.extend(["-e", extensions.strip()])
+
+            print("[*] Running directory brute-force scan...")
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=900)
+            if result.returncode not in (0, 1):
+                print(f"[!] dirscan warning: {result.stderr}")
+                logger.warning("directory scanner returned non-zero exit code %s: %s", result.returncode, result.stderr)
+
+            if output_path.exists():
+                with open(output_path, "r", encoding="utf-8") as handle:
+                    return json.load(handle)
+
+            print("[*] Directory scan complete - no JSON output generated")
+            logger.info("Directory scan completed with no output")
+            return {"results": []}
+        except subprocess.TimeoutExpired:
+            print("[!] Directory scan timed out")
+            logger.error("Directory scan timed out")
+            return {"results": []}
+        except Exception as e:
+            print(f"[!] Directory scan failed: {e}")
+            logger.exception("Directory scan failed")
+            return {"results": []}
+        finally:
+            if temp_dir and temp_dir.exists():
+                try:
+                    shutil.rmtree(temp_dir, ignore_errors=True)
+                except Exception:
+                    logger.debug("Failed to cleanup directory scan temp dir: %s", temp_dir)
+            if 'output_path' in locals() and output_path.exists():
+                try:
+                    output_path.unlink()
+                except OSError:
+                    logger.debug("Failed to remove temporary directory scan output: %s", output_path)
     
-    def run(self, run_zap: bool = True, run_codeql: bool = True, source_path: str = None) -> Dict:
-        """Run ZAP and CodeQL scans and return raw results"""
+    def run(
+        self,
+        run_zap: bool = True,
+        run_codeql: bool = True,
+        run_dirscan: bool = False,
+        source_path: str = None,
+        dirscan_wordlist: str = None,
+        dirscan_recursive: bool = True,
+        dirscan_depth: int = 2,
+        dirscan_threads: int = 80,
+        dirscan_rate: int = 0,
+        dirscan_extensions: str = "",
+    ) -> Dict:
+        """Run configured scans and return raw results"""
         print(f"\n{'=' * 80}")
         print(f"Starting security scan of {self.target_url}")
         print(f"{'=' * 80}\n")
@@ -298,5 +434,15 @@ class VulnerabilityEngine:
         
         if run_codeql:
             results["codeql"] = self.run_codeql_scan(source_path)
+
+        if run_dirscan:
+            results["dirscan"] = self.run_dirscan_scan(
+                wordlist_path=dirscan_wordlist,
+                recursive=dirscan_recursive,
+                recursion_depth=dirscan_depth,
+                threads=dirscan_threads,
+                rate=dirscan_rate,
+                extensions=dirscan_extensions,
+            )
         
         return results

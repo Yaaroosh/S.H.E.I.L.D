@@ -17,11 +17,14 @@
         "asset": "ZAP_2.15.0_Crossplatform.zip",
         "entry_bat": "zap.bat"
     },
-    
-    "juice_shop": {
-        "repo": "juice-shop/juice-shop",
-        "tag": "v17.1.0",
-        "entry": "build\\app"  
+
+    "ffuf": {
+        "repo": "ffuf/ffuf",
+        "tag": "v2.1.0",
+        "asset": "ffuf_2.1.0_windows_amd64.zip",
+        "entry_exe": "ffuf.exe",
+        "default_wordlist_url": "https://raw.githubusercontent.com/danielmiessler/SecLists/master/Discovery/Web-Content/common.txt",
+        "default_wordlist_path": "wordlists\\common.txt"
     }
 
 }

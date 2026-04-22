@@ -1,4 +1,5 @@
 @echo off
+set SCRIPT_DIR=%~dp0
 echo Checking PowerShell ExecutionPolicy...
 
 for /f "delims=" %%i in ('powershell -Command "Get-ExecutionPolicy -Scope CurrentUser"') do set POLICY=%%i
@@ -15,5 +16,5 @@ if "%POLICY%"=="Restricted" (
 )
 
 echo Policy OK. Running setup...
-powershell -ExecutionPolicy Bypass -File scripts\setup.ps1
+powershell -ExecutionPolicy Bypass -File "%SCRIPT_DIR%setup.ps1"
 

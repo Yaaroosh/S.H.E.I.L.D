@@ -43,6 +43,9 @@ class VulnerabilityParser:
                 "Outdated Libraries": ["zap", "codeql"],
                 "Known Vulnerabilities in Dependencies": ["zap", "codeql"],
             },
+            "Attack Surface Discovery": {
+                "Directory Exposure": ["dirscan"],
+            },
         }
         # Initialize findings structure
         self.findings: Dict[str, List[Dict]] = {}
@@ -121,6 +124,37 @@ class VulnerabilityParser:
                     "evidence": rule_id,
                 }
                 self._categorize_finding(finding, "codeql")
+
+    def parse_dirscan(self, dirscan_data: Dict):
+        """Parse directory brute-force results and categorize discovered paths."""
+        if not dirscan_data or "results" not in dirscan_data:
+            return
+
+        for result in dirscan_data.get("results", []):
+            url = result.get("url", "")
+            status = result.get("status", 0)
+            word = result.get("input", {}).get("FUZZ", "")
+            length = result.get("length", "")
+
+            if status in (200, 201, 204, 206):
+                severity = "LOW"
+            elif status in (301, 302, 307, 308):
+                severity = "INFO"
+            elif status in (401, 403):
+                severity = "MEDIUM"
+            else:
+                severity = "INFO"
+
+            finding = {
+                "tool": "ffuf",
+                "name": "Directory Exposure",
+                "description": f"Discovered path: {url or word} (status {status}, length {length})",
+                "severity": severity,
+                "url": url,
+                "evidence": word,
+            }
+
+            self._categorize_finding(finding, "dirscan")
     
     def _categorize_finding(self, finding: Dict, tool: str):
         """Categorize a single finding into appropriate category"""
@@ -163,6 +197,8 @@ class VulnerabilityParser:
             return ("Cross-Site Attacks", "Cross-Site Scripting (XSS)")
         if "csrf" in name or "cross-site request forgery" in name:
             return ("Cross-Site Attacks", "Cross-Site Request Forgery (CSRF)")
+        if "directory" in name or "path" in name or "endpoint" in name:
+            return ("Attack Surface Discovery", "Directory Exposure")
 
         return None
     

@@ -17,7 +17,7 @@ $Lock = Get-Content -Raw -Path $LockPath | ConvertFrom-Json
 # -------------------------
 # Helpers
 # -------------------------
-function Download-And-ExtractZip {
+function Invoke-DownloadAndExtractZip {
     param(
         [Parameter(Mandatory=$true)][string]$Url,
         [Parameter(Mandatory=$true)][string]$ZipPath,
@@ -30,7 +30,7 @@ function Download-And-ExtractZip {
     Expand-Archive -Path $ZipPath -DestinationPath $DestDir -Force
     Remove-Item $ZipPath -Force
 }
-function Verify-Tool {
+function Test-Tool {
     param(
         [Parameter(Mandatory=$true)][string]$Name,
         [Parameter(Mandatory=$true)][string]$ExecutablePath,
@@ -75,10 +75,10 @@ function Install-CodeQL {
     $url = "https://github.com/$repo/releases/download/$tag/$asset"
     $zip = Join-Path $ToolsDir $asset
 
-    Download-And-ExtractZip -Url $url -ZipPath $zip -DestDir $CodeQLDir
+    Invoke-DownloadAndExtractZip -Url $url -ZipPath $zip -DestDir $CodeQLDir
 
     $CodeQLExe = Join-Path $CodeQLDir $Lock.codeql.entry_exe
-    Verify-Tool -Name "CodeQL" -ExecutablePath $CodeQLExe -VersionArgs "version"
+    Test-Tool -Name "CodeQL" -ExecutablePath $CodeQLExe -VersionArgs "version"
     Write-Host "CodeQL installed successfully." -ForegroundColor Green
 }
 
@@ -102,147 +102,68 @@ function Install-Zap {
     $url = "https://github.com/$repo/releases/download/$tag/$asset"
     $zip = Join-Path $ToolsDir $asset
 
-    Download-And-ExtractZip -Url $url -ZipPath $zip -DestDir $ZapDir
+    Invoke-DownloadAndExtractZip -Url $url -ZipPath $zip -DestDir $ZapDir
 
     # Verify installation
     $zapBat = Get-ChildItem -Path $ZapDir -Recurse -Filter $Lock.zap.entry_bat -ErrorAction SilentlyContinue | Select-Object -First 1
 
     $zapPath = if ($zapBat) { $zapBat.FullName } else { "" }
 
-    Verify-Tool -Name "OWASP ZAP" -ExecutablePath $zapPath
+    Test-Tool -Name "OWASP ZAP" -ExecutablePath $zapPath
     Write-Host "ZAP installed: $($zapBat.FullName)" -ForegroundColor Green
     Write-Host "Reminder: ZAP requires Java 17+ to run." -ForegroundColor Cyan
 }
 
 # -------------------------
-# Install OWASP Juice Shop
+# Install ffuf (pinned)
 # -------------------------
-function Install-JuiceShop {
-    $JuiceShopDir = Join-Path $ToolsDir "juice-shop"
+function Install-Ffuf {
+    $FfufDir = Join-Path $ToolsDir "ffuf"
+    $FfufExe = Join-Path $FfufDir $Lock.ffuf.entry_exe
+    $DefaultWordlist = Join-Path $FfufDir $Lock.ffuf.default_wordlist_path
 
-    $juiceShopChoice = Read-Host "Download or update OWASP Juice Shop? (y/N)"
-    if ($juiceShopChoice -notmatch '^(?i:y|yes)$') {
-        Write-Host "Skipping OWASP Juice Shop setup by user choice." -ForegroundColor Yellow
+    if ((Test-Path $FfufExe) -and (Test-Path $DefaultWordlist)) {
+        Write-Host "ffuf already installed." -ForegroundColor Green
+        & $FfufExe -h | Out-Null
         return
     }
 
-    if (Test-Path $JuiceShopDir) {
-        $packageJson = Join-Path $JuiceShopDir "package.json"
-        $nodeModules = Join-Path $JuiceShopDir "node_modules"
-        $configuredEntry = Join-Path $JuiceShopDir $Lock.juice_shop.entry
-        $buildCandidates = @(
-            $configuredEntry,
-            "$configuredEntry.js",
-            (Join-Path $JuiceShopDir "build\app.js")
-        )
-        $hasBuildOutput = $false
-        foreach ($candidate in $buildCandidates) {
-            if (Test-Path $candidate) {
-                $hasBuildOutput = $true
-                break
-            }
-        }
-        $dockerMarker = Join-Path $JuiceShopDir 'INSTALLED_VIA_DOCKER'
-        
-        # check for docker-based installation first
-        if (Test-Path $dockerMarker) {
-            Write-Host "OWASP Juice Shop marked as installed via Docker." -ForegroundColor Green
-            return
-        }
+    $repo  = $Lock.ffuf.repo
+    $tag   = $Lock.ffuf.tag
+    $asset = $Lock.ffuf.asset
 
-        # consider the install valid only if dependencies and the build output exist
-        if ((Test-Path $packageJson) -and (Test-Path $nodeModules) -and $hasBuildOutput) {
-            Write-Host "OWASP Juice Shop already installed and built." -ForegroundColor Green
-            return
-        }
-        else {
-            # Incomplete or broken installation, remove and retry
-            Write-Host "Removing incomplete or broken Juice Shop installation..." -ForegroundColor Yellow
-            Remove-Item -Path $JuiceShopDir -Recurse -Force -ErrorAction SilentlyContinue
+    $url = "https://github.com/$repo/releases/download/$tag/$asset"
+    $zip = Join-Path $ToolsDir $asset
+
+    Invoke-DownloadAndExtractZip -Url $url -ZipPath $zip -DestDir $FfufDir
+
+    $FfufExe = Join-Path $FfufDir $Lock.ffuf.entry_exe
+    if (!(Test-Path $FfufExe)) {
+        $found = Get-ChildItem -Path $FfufDir -Recurse -Filter $Lock.ffuf.entry_exe -ErrorAction SilentlyContinue | Select-Object -First 1
+        if ($found) {
+            $FfufExe = $found.FullName
         }
     }
 
-    # Check for Node.js
-    try {
-        $nodeVersion = & node --version 2>$null
-        Write-Host "Found Node.js: $nodeVersion" -ForegroundColor Green
-        if ($nodeVersion -match '^v(\d+)') {
-            $nodeMajor = [int]$matches[1]
-        } else {
-            $nodeMajor = 0
-        }
-    }
-    catch {
-        $nodeVersion = $null
-        $nodeMajor = 0
-        Write-Host "Node.js is required to run OWASP Juice Shop but was not found." -ForegroundColor Red
-    }
+    Test-Tool -Name "ffuf" -ExecutablePath $FfufExe -VersionArgs "-h"
 
-    if (-not $nodeVersion) {
-        Write-Host "Please install Node.js 18+ (recommended v20 for best compatibility) from https://nodejs.org/" -ForegroundColor Yellow
-        return
+    $WordlistUrl = $Lock.ffuf.default_wordlist_url
+    $WordlistDir = Split-Path -Parent $DefaultWordlist
+    if (!(Test-Path $WordlistDir)) {
+        New-Item -ItemType Directory -Path $WordlistDir -Force | Out-Null
     }
-
-    if ($nodeMajor -gt 20) {
-        Write-Host "Detected Node.js v$nodeMajor which may not be able to build Juice Shop." -ForegroundColor Yellow
-        if (Get-Command docker -ErrorAction SilentlyContinue) {
-            Write-Host "Docker is available; you may prefer to use the container instead of building." -ForegroundColor Cyan
-            Write-Host "The script will still attempt the source install unless you manually interrupt." -ForegroundColor Cyan
-            # optionally pull image for later
-            $imageTag = $Lock.juice_shop.tag.TrimStart('v')
-            & docker pull "bkimminich/juice-shop:$imageTag" | Out-Null
-            Write-Host "If build fails you can run the pulled container: docker run -p 3000:3000 bkimminich/juice-shop:$imageTag" -ForegroundColor Green
-        }
-        else {
-            Write-Host "Continuing with a source build despite unsupported Node version." -ForegroundColor Yellow
-        }
-        # do not return; proceed with clone and install
-    }
-
-    # Check for Git
-    try {
-        $gitVersion = & git --version 2>$null
-        Write-Host "Found Git: $gitVersion" -ForegroundColor Green
-    }
-    catch {
-        Write-Host "Git is required to clone OWASP Juice Shop but was not found." -ForegroundColor Red
-        Write-Host "Please install Git from https://git-scm.com/" -ForegroundColor Yellow
-        return
-    }
-
-    $repo = $Lock.juice_shop.repo
-    $tag  = $Lock.juice_shop.tag
-
-    Write-Host "Cloning OWASP Juice Shop from GitHub..." -ForegroundColor Yellow
-    & git clone --depth 1 --branch $tag "https://github.com/$repo.git" $JuiceShopDir
-    
-    if ($LASTEXITCODE -ne 0) {
-        Write-Host "Failed to clone Juice Shop repository." -ForegroundColor Red
+    Write-Host "Downloading ffuf default wordlist..." -ForegroundColor Yellow
+    Invoke-WebRequest -Uri $WordlistUrl -OutFile $DefaultWordlist -UseBasicParsing
+    if (!(Test-Path $DefaultWordlist)) {
+        Write-Host "ffuf default wordlist installation failed at $DefaultWordlist" -ForegroundColor Red
         exit 1
     }
 
-    # Install npm dependencies
-    Write-Host "Installing npm dependencies for Juice Shop..." -ForegroundColor Cyan
-    Push-Location $JuiceShopDir
-    try {
-        & npm install --legacy-peer-deps
-        if ($LASTEXITCODE -ne 0) {
-            Write-Host "npm install failed for Juice Shop." -ForegroundColor Red
-            Pop-Location
-            exit 1
-        }
-    }
-    finally {
-        Pop-Location
-    }
-
-    Write-Host "OWASP Juice Shop installed successfully." -ForegroundColor Green
-    Write-Host "To run Juice Shop: npm start" -ForegroundColor Cyan
-    Write-Host "Then visit: http://localhost:3000" -ForegroundColor Cyan
+    Write-Host "ffuf installed successfully." -ForegroundColor Green
 }
 
 Install-CodeQL
 Install-Zap
-Install-JuiceShop
+Install-Ffuf
 
 Write-Host "Setup complete." -ForegroundColor Green

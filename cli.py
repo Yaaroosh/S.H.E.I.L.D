@@ -86,7 +86,14 @@ def run_full_security_scan(
     verify_tls: bool,
     run_zap: bool = True,
     run_codeql: bool = True,
+    run_dirscan: bool = False,
     source_path: str = None,
+    dirscan_wordlist: str = None,
+    dirscan_recursive: bool = True,
+    dirscan_depth: int = 2,
+    dirscan_threads: int = 80,
+    dirscan_rate: int = 0,
+    dirscan_extensions: str = "",
     zap_auth_cookie: str = None,
     zap_auth_header: str = None,
 ) -> dict:
@@ -94,7 +101,15 @@ def run_full_security_scan(
     Run integrated security scan with categorization
     """
     try:
-        logger.info("Running full scan | target=%s | run_zap=%s | run_codeql=%s", target_url, run_zap, run_codeql)
+        logger.info(
+            "Running full scan | target=%s | run_zap=%s | run_codeql=%s | run_dirscan=%s | dirscan_recursive=%s | dirscan_depth=%s",
+            target_url,
+            run_zap,
+            run_codeql,
+            run_dirscan,
+            dirscan_recursive,
+            dirscan_depth,
+        )
         # Run scan (engine will also perform reachability check)
         engine = VulnerabilityEngine(
             target_url,
@@ -103,13 +118,26 @@ def run_full_security_scan(
             zap_auth_cookie=zap_auth_cookie,
             zap_auth_header=zap_auth_header,
         )
-        scan_data = engine.run(run_zap=run_zap, run_codeql=run_codeql, source_path=source_path)
+        scan_data = engine.run(
+            run_zap=run_zap,
+            run_codeql=run_codeql,
+            run_dirscan=run_dirscan,
+            source_path=source_path,
+            dirscan_wordlist=dirscan_wordlist,
+            dirscan_recursive=dirscan_recursive,
+            dirscan_depth=dirscan_depth,
+            dirscan_threads=dirscan_threads,
+            dirscan_rate=dirscan_rate,
+            dirscan_extensions=dirscan_extensions,
+        )
         parser = VulnerabilityParser()
         
         if run_zap:
             parser.parse_zap(scan_data.get("zap", {}))
         if run_codeql:
             parser.parse_codeql(scan_data.get("codeql", {}))
+        if run_dirscan:
+            parser.parse_dirscan(scan_data.get("dirscan", {}))
         
         findings = parser.get_findings()
         summary = parser.get_summary()
@@ -162,10 +190,17 @@ def build_parser() -> argparse.ArgumentParser:
     )
 
     # Test flags (ADD MORE HERE)
-    parser.add_argument("--full-scan", action="store_true", dest="full_scan", help="Run full security scan (both ZAP and CodeQL)")
+    parser.add_argument("--full-scan", action="store_true", dest="full_scan", help="Run full security scan (ZAP, CodeQL, and dirscan)")
     parser.add_argument("--zap-only", action="store_true", dest="zap_only", help="Run only ZAP DAST scan")
     parser.add_argument("--codeql-only", action="store_true", dest="codeql_only", help="Run only CodeQL SAST scan")
+    parser.add_argument("--dirscan-only", action="store_true", dest="dirscan_only", help="Run only directory brute-force scan")
     parser.add_argument("--source-path", type=str, default=None, help="Path to source code for CodeQL analysis (required for --codeql-only or --full-scan)")
+    parser.add_argument("--dirscan-wordlist", type=str, default=None, help="Path to a custom wordlist for directory scan")
+    parser.add_argument("--dirscan-no-recursion", action="store_true", dest="dirscan_no_recursion", help="Disable recursive directory discovery for dirscan")
+    parser.add_argument("--dirscan-depth", type=int, default=2, help="Maximum recursion depth for dirscan (default: 2)")
+    parser.add_argument("--dirscan-threads", type=int, default=80, help="Concurrent dirscan threads (default: 80)")
+    parser.add_argument("--dirscan-rate", type=int, default=0, help="Requests/sec limit for dirscan (0 = unlimited)")
+    parser.add_argument("--dirscan-extensions", type=str, default="", help="Comma-separated extension list for dirscan (example: php,html,js,bak)")
     parser.add_argument("--auth-cookie", type=str, default=None, help="Cookie header value for authenticated ZAP scans (example: session=abc123)")
     parser.add_argument("--auth-header", type=str, default=None, help="Custom auth header for ZAP requests (format: 'Authorization: Bearer <token>')")
 
@@ -196,14 +231,19 @@ def main() -> int:
     logger.debug("HTTP session initialized with user-agent: %s", user_agent)
 
     # Decide which tests to run
-    if not (args.full_scan or args.zap_only or args.codeql_only):
-        print("No tests selected. Use --full-scan, --zap-only, or --codeql-only")
+    if not (args.full_scan or args.zap_only or args.codeql_only or args.dirscan_only):
+        print("No tests selected. Use --full-scan, --zap-only, --codeql-only, or --dirscan-only")
         logger.warning("CLI invoked without test selection")
         return 2
 
     # Determine which tools to run
     run_zap = args.full_scan or args.zap_only
     run_codeql = args.full_scan or args.codeql_only
+    run_dirscan = args.full_scan or args.dirscan_only
+    dirscan_recursive = not args.dirscan_no_recursion
+    dirscan_depth = max(0, int(args.dirscan_depth))
+    dirscan_threads = max(1, int(args.dirscan_threads))
+    dirscan_rate = max(0, int(args.dirscan_rate))
 
     results = []
 
@@ -215,7 +255,14 @@ def main() -> int:
             verify_tls, 
             run_zap=run_zap, 
             run_codeql=run_codeql,
+            run_dirscan=run_dirscan,
             source_path=args.source_path,
+            dirscan_wordlist=args.dirscan_wordlist,
+            dirscan_recursive=dirscan_recursive,
+            dirscan_depth=dirscan_depth,
+            dirscan_threads=dirscan_threads,
+            dirscan_rate=dirscan_rate,
+            dirscan_extensions=args.dirscan_extensions,
             zap_auth_cookie=args.auth_cookie,
             zap_auth_header=args.auth_header,
         ))
