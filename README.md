@@ -52,9 +52,6 @@ python cli.py --zap-only
 # ZAP with authenticated session cookie
 python cli.py --zap-only --auth-cookie "session=abc123"
 
-# ZAP with bearer token header
-python cli.py --zap-only --auth-header "Authorization: Bearer <token>"
-
 # CodeQL SAST only (requires source path)
 python cli.py --codeql-only
 

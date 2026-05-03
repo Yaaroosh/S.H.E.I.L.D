@@ -61,17 +61,32 @@ class VulnerabilityParser:
             for alert in site.get("alerts", []):
                 risk = alert.get("riskcode", "3")
                 severity_map = {"0": "INFO", "1": "LOW", "2": "MEDIUM", "3": "HIGH", "4": "CRITICAL"}
-                
-                finding = {
-                    "tool": "ZAP",
-                    "name": alert.get("name", "Unknown"),
-                    "description": alert.get("desc", ""),
-                    "severity": severity_map.get(str(risk), "UNKNOWN"),
-                    "url": alert.get("url", ""),
-                    "evidence": alert.get("evidence", ""),
-                }
-                
-                self._categorize_finding(finding, "zap")
+
+                # ZAP JSON often stores concrete endpoint details under
+                # alert.instances[].uri rather than alert.url.
+                instances = alert.get("instances", []) or []
+
+                if instances:
+                    for inst in instances:
+                        finding = {
+                            "tool": "ZAP",
+                            "name": alert.get("name", "Unknown"),
+                            "description": alert.get("desc", ""),
+                            "severity": severity_map.get(str(risk), "UNKNOWN"),
+                            "url": inst.get("uri") or alert.get("url", "") or site.get("@name", ""),
+                            "evidence": inst.get("evidence") or alert.get("evidence", ""),
+                        }
+                        self._categorize_finding(finding, "zap")
+                else:
+                    finding = {
+                        "tool": "ZAP",
+                        "name": alert.get("name", "Unknown"),
+                        "description": alert.get("desc", ""),
+                        "severity": severity_map.get(str(risk), "UNKNOWN"),
+                        "url": alert.get("url", "") or site.get("@name", ""),
+                        "evidence": alert.get("evidence", ""),
+                    }
+                    self._categorize_finding(finding, "zap")
     
     def parse_codeql(self, codeql_data: Dict):
         """Parse CodeQL SARIF results and categorize"""
