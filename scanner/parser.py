@@ -61,6 +61,11 @@ class VulnerabilityParser:
             for alert in site.get("alerts", []):
                 risk = alert.get("riskcode", "3")
                 severity_map = {"0": "INFO", "1": "LOW", "2": "MEDIUM", "3": "HIGH", "4": "CRITICAL"}
+                severity = severity_map.get(str(risk), "UNKNOWN")
+                
+                # Skip INFO severity findings (noise)
+                if severity == "INFO":
+                    continue
 
                 # ZAP JSON often stores concrete endpoint details under
                 # alert.instances[].uri rather than alert.url.
@@ -72,8 +77,12 @@ class VulnerabilityParser:
                             "tool": "ZAP",
                             "name": alert.get("name", "Unknown"),
                             "description": alert.get("desc", ""),
-                            "severity": severity_map.get(str(risk), "UNKNOWN"),
+                            "severity": severity,
                             "url": inst.get("uri") or alert.get("url", "") or site.get("@name", ""),
+                            "method": inst.get("method", ""),
+                            "param": inst.get("param", ""),
+                            "attack": inst.get("attack", ""),
+                            "other": inst.get("other", ""),
                             "evidence": inst.get("evidence") or alert.get("evidence", ""),
                         }
                         self._categorize_finding(finding, "zap")
@@ -82,8 +91,12 @@ class VulnerabilityParser:
                         "tool": "ZAP",
                         "name": alert.get("name", "Unknown"),
                         "description": alert.get("desc", ""),
-                        "severity": severity_map.get(str(risk), "UNKNOWN"),
+                        "severity": severity,
                         "url": alert.get("url", "") or site.get("@name", ""),
+                        "method": alert.get("method", ""),
+                        "param": alert.get("param", ""),
+                        "attack": alert.get("attack", ""),
+                        "other": alert.get("other", ""),
                         "evidence": alert.get("evidence", ""),
                     }
                     self._categorize_finding(finding, "zap")
@@ -125,10 +138,48 @@ class VulnerabilityParser:
                     severity = "HIGH" if level == "warning" else "MEDIUM"
 
                 message = result.get("message", {}).get("text", "")
-                artifact_uri = ""
                 locations = result.get("locations", [])
-                if locations:
-                    artifact_uri = locations[0].get("physicalLocation", {}).get("artifactLocation", {}).get("uri", "")
+
+                artifact_uri = ""
+                request_segments = []
+
+                for loc in locations:
+                    physical = loc.get("physicalLocation", {})
+                    artifact = physical.get("artifactLocation", {})
+                    region = physical.get("region", {})
+
+                    file_uri = artifact.get("uri", "")
+                    if not artifact_uri and file_uri:
+                        artifact_uri = file_uri
+
+                    start_line = region.get("startLine")
+                    start_column = region.get("startColumn")
+
+                    location_label = file_uri or "unknown-file"
+                    if start_line:
+                        location_label += f":{start_line}"
+                        if start_column:
+                            location_label += f":{start_column}"
+
+                    function_name = ""
+                    logical_locations = loc.get("logicalLocations", [])
+                    for logical in logical_locations:
+                        kind = str(logical.get("kind", "")).lower()
+                        if kind == "function" and logical.get("fullyQualifiedName"):
+                            function_name = logical.get("fullyQualifiedName")
+                            break
+                        if kind == "function" and logical.get("name"):
+                            function_name = logical.get("name")
+                            break
+
+                    segment = location_label
+                    if function_name:
+                        segment += f" (function={function_name})"
+
+                    if segment not in request_segments:
+                        request_segments.append(segment)
+
+                request_detail = ", ".join(request_segments[:5]) if request_segments else (artifact_uri or "unknown-location")
 
                 finding = {
                     "tool": "CodeQL",
@@ -136,6 +187,7 @@ class VulnerabilityParser:
                     "description": message,
                     "severity": severity,
                     "url": artifact_uri,
+                    "request_detail": request_detail,
                     "evidence": rule_id,
                 }
                 self._categorize_finding(finding, "codeql")
@@ -218,13 +270,14 @@ class VulnerabilityParser:
         return None
     
     def get_findings(self) -> Dict[str, List[Dict]]:
-        """Return all categorized findings"""
+        """Return all categorized findings
+        this function does: Returns a dictionary mapping categories to lists of findings."""
         return self.findings
     
     def get_summary(self) -> Dict:
         """Get summary statistics"""
         total = sum(len(vulns) for vulns in self.findings.values())
-        severity_count = {"CRITICAL": 0, "HIGH": 0, "MEDIUM": 0, "LOW": 0, "INFO": 0}
+        severity_count = {"CRITICAL": 0, "HIGH": 0, "MEDIUM": 0, "LOW": 0}
         
         for vulns in self.findings.values():
             for vuln in vulns:
