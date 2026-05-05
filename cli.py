@@ -87,8 +87,6 @@ def run_full_security_scan(
     dirscan_recursive: bool = True,
     dirscan_depth: int = 2,
     dirscan_threads: int = 80,
-    zap_auth_cookie: str = None,
-    
 ) -> dict:
     """
     Run integrated security scan with categorization
@@ -109,7 +107,6 @@ def run_full_security_scan(
             target_url,
             timeout=timeout,
             verify_tls=verify_tls,
-            zap_auth_cookie=zap_auth_cookie,
         )
         
         # Run scan (engine will also perform reachability check)
@@ -193,7 +190,6 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--dirscan-no-recursion", action="store_true", dest="dirscan_no_recursion", help="Disable recursive directory discovery for dirscan")
     parser.add_argument("--dirscan-depth", type=int, default=2, help="Maximum recursion depth for dirscan (default: 2)")
     parser.add_argument("--dirscan-threads", type=int, default=80, help="Concurrent dirscan threads (default: 80)")
-    parser.add_argument("--auth-cookie", type=str, default=None, help="Cookie header value for authenticated ZAP scans (example: session=abc123)")
 
     # Convenience flags (ADD MORE HERE)
     # parser.add_argument("--all", action="store_true", help="Run all tests")
@@ -252,7 +248,6 @@ def main() -> int:
             dirscan_recursive=dirscan_recursive,
             dirscan_depth=dirscan_depth,
             dirscan_threads=dirscan_threads,
-            zap_auth_cookie=args.auth_cookie,
         ))
     except Exception as e:
         results.append({"test": "full_scan", "ok": False, "error": f"{type(e).__name__}: {e}"})

@@ -32,8 +32,6 @@ class VulnerabilityEngine:
         output_dir: str = "scan-results",
         timeout: float = 10.0,
         verify_tls: bool = True,
-        zap_auth_cookie: str = None,
-        zap_auth_header: str = None,
     ):
         self.target_url = target_url
         self.output_dir = Path(output_dir)
@@ -42,8 +40,6 @@ class VulnerabilityEngine:
         # settings used by scans
         self.timeout = timeout
         self.verify_tls = verify_tls
-        self.zap_auth_cookie = zap_auth_cookie
-        self.zap_auth_header = zap_auth_header
 
     def check_reachability(self) -> Dict:
         """Perform a simple HTTP GET to verify the target is reachable.
@@ -101,22 +97,7 @@ class VulnerabilityEngine:
             #ZAP command line (quickout means quick scan ruleset, less through, much faster)
             cmd = [zap_cmd, "-cmd", "-quickurl", self.target_url, "-quickout", str(temp_report_path)]
 
-            zap_config_args = []
-            # if cookie provided, add replacer config to inject it into requests
-            if self.zap_auth_cookie:
-                cookie_value = self.zap_auth_cookie.replace(" ", "")
-                zap_config_args.extend([
-                    "-config", "replacer.full_list(0).description=auth-cookie",
-                    "-config", "replacer.full_list(0).enabled=true",
-                    "-config", "replacer.full_list(0).matchtype=REQ_HEADER",
-                    "-config", "replacer.full_list(0).matchstr=Cookie",
-                    "-config", "replacer.full_list(0).regex=false",
-                    "-config", f"replacer.full_list(0).replacement={cookie_value}",
-                ])
-                logger.info("ZAP auth cookie configured")
 
-            # extends if cookie provided
-            cmd.extend(zap_config_args)
             
             # Run ZAP from its own directory so it can find JAR
             result = subprocess.run(cmd, capture_output=True, text=True, timeout=300, cwd=str(zap_dir))
